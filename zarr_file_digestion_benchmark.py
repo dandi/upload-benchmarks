@@ -15,10 +15,10 @@ import boto3
 from dandischema.digests.dandietag import mb, gb, tb, Part, PartGenerator
 
 
-# MAX_WORKERS = 50
-MAX_WORKERS = 5
+MAX_WORKERS = 50
 OUTPUT_CSV_HEADERS = [
     "workers",
+    "total_time",
     "total_size",
     "avg_part_time",
     "avg_create_upload_time",
@@ -79,7 +79,7 @@ def copy_part(part: Part):
     key = f"blobs/{ident[:3]}/{ident[3:6]}/{ident}"
 
     # Logging
-    if part.number % 1000 == 0:
+    if part.number % 10 == 0:
         print(f"---- Part {part.number} ---")
 
     start = time.time()
@@ -130,6 +130,7 @@ def dissasemble_object(workers, size):
     #     Bucket=SOURCE_BUCKET, Key=SOURCE_OBJECT_KEY
     # )["ContentLength"]
     parts = list(gen_object_parts(content_length))
+    print("WORKERS", workers)
     print(f"TOTAL PARTS: {len(parts)}")
     print("CONTENT LENGTH", content_length)
     print("-------------------------")
@@ -174,7 +175,8 @@ if __name__ == "__main__":
     writer.writerow(OUTPUT_CSV_HEADERS)
 
     for i in range(1, MAX_WORKERS + 1):
-        total_size = i * kb(150)
+        # total_size = i * kb(150)
+        total_size = mb(200)
         (
             parts,
             total,
@@ -202,6 +204,7 @@ if __name__ == "__main__":
         writer.writerow(
             [
                 i,
+                total,
                 total_size,
                 avg_part_total,
                 avg_create_upload,
@@ -209,6 +212,7 @@ if __name__ == "__main__":
                 avg_complete_upload,
             ]
         )
+        f.flush()
 
     # Close file
     f.close()
