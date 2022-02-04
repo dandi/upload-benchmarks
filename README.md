@@ -5,6 +5,15 @@ Benchmarks should generally be run on the [DANDI Hub](https://hub.dandiarchive.o
 
 Tests were run against a separate Heroku instance set up specifically for benchmarking. This makes clean up quick and convenient. See https://github.com/dandi/dandi-infrastructure/pull/115 for details.
 
+### presigned_zarr_upload_benchmark
+This benchmarks uploading zarr-like data using the zarr upload API. 150KB file chunks are used.
+
+The server used to run this benchmark had checksumming disabled so that the upload was limited to moving bytes into S3.
+
+Uploading a batch of 10,000 150KB files (1.5 GB total) with 50 threads:
+- 55 seconds
+- 216 MBit/s
+
 ### large_file_upload_benchmark
 This benchmarks uploading a single large file using the standard blob upload API. Randomly generated data is used.
 
