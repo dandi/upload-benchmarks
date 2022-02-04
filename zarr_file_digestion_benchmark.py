@@ -3,7 +3,10 @@ Benchmark slicing up a large file in S3 into individual zarr files.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+import csv
+from datetime import datetime
 import math
+import pathlib
 import time
 from typing import Dict, List
 import uuid
@@ -12,11 +15,20 @@ import boto3
 from dandischema.digests.dandietag import mb, gb, tb, Part, PartGenerator
 
 
+# MAX_WORKERS = 50
+MAX_WORKERS = 5
+OUTPUT_CSV_HEADERS = [
+    "workers",
+    "total_size",
+    "avg_part_time",
+    "avg_create_upload_time",
+    "avg_copy_part_time",
+    "avg_complete_upload_time",
+]
+
+
 def kb(bytes_size: int) -> int:
     return bytes_size * 2**10
-
-
-# PartGenerator.DEFAULT_PART_SIZE = kb(150)
 
 
 class DandiPartGenerator(PartGenerator):
@@ -112,11 +124,11 @@ def copy_part(part: Part):
     return total, time_create_upload, time_part_copy, time_complete_upload
 
 
-def dissasemble_object():
-    # content_length = mb(10)
-    content_length: int = client.head_object(
-        Bucket=SOURCE_BUCKET, Key=SOURCE_OBJECT_KEY
-    )["ContentLength"]
+def dissasemble_object(workers, size):
+    content_length = size
+    # content_length: int = client.head_object(
+    #     Bucket=SOURCE_BUCKET, Key=SOURCE_OBJECT_KEY
+    # )["ContentLength"]
     parts = list(gen_object_parts(content_length))
     print(f"TOTAL PARTS: {len(parts)}")
     print("CONTENT LENGTH", content_length)
@@ -131,7 +143,7 @@ def dissasemble_object():
     start = time.time()
 
     futures: List[Dict] = []
-    with ThreadPoolExecutor(max_workers=50) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         for part in parts:
             futures.append(executor.submit(copy_part, part=part))
 
@@ -155,25 +167,48 @@ def dissasemble_object():
 
 
 if __name__ == "__main__":
-    (
-        parts,
-        total,
-        part_total,
-        create_upload,
-        part_copy,
-        complete_upload,
-    ) = dissasemble_object()
+    filename = f"benchmark_{datetime.now().isoformat()}.csv"
+    output_csv = pathlib.Path(__file__).parent / filename
+    f = open(output_csv, "w")
+    writer = csv.writer(f)
+    writer.writerow(OUTPUT_CSV_HEADERS)
 
-    print(f"Total time taken: {total:.4f} s")
+    for i in range(1, MAX_WORKERS + 1):
+        total_size = i * kb(150)
+        (
+            parts,
+            total,
+            part_total,
+            create_upload,
+            part_copy,
+            complete_upload,
+        ) = dissasemble_object(i, total_size)
 
-    avg_part_total = part_total / len(parts)
-    print(f"Average total part time: {avg_part_total:.4f} s")
+        print(f"Total time taken: {total:.4f} s")
 
-    avg_create_upload = create_upload / len(parts)
-    print(f"Average time spent creating uploads: {avg_create_upload:.4f} s")
+        avg_part_total = part_total / len(parts)
+        print(f"Average total part time: {avg_part_total:.4f} s")
 
-    avg_part_copy = part_copy / len(parts)
-    print(f"Average time spent copying parts: {avg_part_copy:.4f} s")
+        avg_create_upload = create_upload / len(parts)
+        print(f"Average time spent creating uploads: {avg_create_upload:.4f} s")
 
-    avg_complete_upload = complete_upload / len(parts)
-    print(f"Average time spent completing uploads: {avg_complete_upload:.4f} s")
+        avg_part_copy = part_copy / len(parts)
+        print(f"Average time spent copying parts: {avg_part_copy:.4f} s")
+
+        avg_complete_upload = complete_upload / len(parts)
+        print(f"Average time spent completing uploads: {avg_complete_upload:.4f} s")
+
+        # Row data
+        writer.writerow(
+            [
+                i,
+                total_size,
+                avg_part_total,
+                avg_create_upload,
+                avg_part_copy,
+                avg_complete_upload,
+            ]
+        )
+
+    # Close file
+    f.close()
