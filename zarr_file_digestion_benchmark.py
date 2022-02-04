@@ -12,6 +12,7 @@ from typing import Dict, List
 import uuid
 
 import boto3
+import click
 from dandischema.digests.dandietag import mb, gb, tb, Part, PartGenerator
 
 
@@ -65,16 +66,21 @@ class DandiPartGenerator(PartGenerator):
 client = boto3.client("s3")
 
 
-SOURCE_BUCKET = "dandi-api-benchmark-dandisets"
-SOURCE_OBJECT_KEY = "blobs/f7d/138/f7d1383b-1c28-497e-b7e0-69fa4d55989e"
-COPY_SOURCE = f"{SOURCE_BUCKET}/{SOURCE_OBJECT_KEY}"
+DEFAULT_SOURCE_BUCKET = "dandi-api-benchmark-dandisets"
+DEFAULT_SOURCE_OBJECT_KEY = "blobs/f7d/138/f7d1383b-1c28-497e-b7e0-69fa4d55989e"
+DEFAULT_COPY_SOURCE = f'{DEFAULT_SOURCE_BUCKET}/{DEFAULT_SOURCE_OBJECT_KEY}'
 
 
-def gen_object_parts(object_size: int):
+def gen_object_parts(object_size: int, part_size: int = kb(150)):
+    DandiPartGenerator.DEFAULT_PART_SIZE = part_size
     return DandiPartGenerator.for_file_size(object_size)
 
 
-def copy_part(part: Part):
+def copy_part(part: Part, copy_source: str, num_parts: int):
+    source_bucket, *source_key_parts = copy_source.split("/")
+    source_key = "/".join(source_key_parts)
+
+    # Generate new object key
     ident = str(uuid.uuid4())
     key = f"blobs/{ident[:3]}/{ident[3:6]}/{ident}"
 
@@ -86,18 +92,19 @@ def copy_part(part: Part):
 
     # Create upload
     upload_id = client.create_multipart_upload(
-        Bucket=SOURCE_BUCKET,
+        Bucket=source_bucket,
         Key=key,
         ACL="bucket-owner-full-control",
     )["UploadId"]
     finish_upload = time.time()
 
     # Upload part copy
+    copy_source = f'{source_bucket}/{source_key}'
     part_copy_res = client.upload_part_copy(
-        Bucket=SOURCE_BUCKET,
+        Bucket=source_bucket,
         Key=key,
         UploadId=upload_id,
-        CopySource=COPY_SOURCE,
+        CopySource=copy_source,
         CopySourceRange=f"bytes={part.offset}-{part.offset + part.size - 1}",
         PartNumber=1,
     )
@@ -107,7 +114,7 @@ def copy_part(part: Part):
     # complete_upload_start = time.time()
     etag = part_copy_res["CopyPartResult"]["ETag"].strip('"')
     client.complete_multipart_upload(
-        Bucket=SOURCE_BUCKET,
+        Bucket=source_bucket,
         Key=key,
         UploadId=upload_id,
         MultipartUpload={
@@ -124,15 +131,11 @@ def copy_part(part: Part):
     return total, time_create_upload, time_part_copy, time_complete_upload
 
 
-def dissasemble_object(workers, size):
-    content_length = size
-    # content_length: int = client.head_object(
-    #     Bucket=SOURCE_BUCKET, Key=SOURCE_OBJECT_KEY
-    # )["ContentLength"]
-    parts = list(gen_object_parts(content_length))
+def dissasemble_object(workers, size, part_size, copy_source):
+    parts = list(gen_object_parts(size, part_size))
     print("WORKERS", workers)
     print(f"TOTAL PARTS: {len(parts)}")
-    print("CONTENT LENGTH", content_length)
+    print("CONTENT LENGTH", size)
     print("-------------------------")
 
     # Timing
@@ -146,7 +149,14 @@ def dissasemble_object(workers, size):
     futures: List[Dict] = []
     with ThreadPoolExecutor(max_workers=workers) as executor:
         for part in parts:
-            futures.append(executor.submit(copy_part, part=part))
+            futures.append(
+                executor.submit(
+                    copy_part,
+                    part=part,
+                    copy_source=copy_source,
+                    num_parts=len(parts),
+                )
+            )
 
     finished_parts = [part.result() for part in futures]
     for part in finished_parts:
@@ -167,16 +177,77 @@ def dissasemble_object(workers, size):
     )
 
 
-if __name__ == "__main__":
-    filename = f"benchmark_{datetime.now().isoformat()}.csv"
+# Click stuff
+@click.command()
+@click.option(
+    "--output",
+    "-o",
+    "filename",
+    default=f"benchmark_{datetime.now().isoformat()}.csv",
+    show_default=True,
+    help="Output file name.",
+)
+@click.option(
+    "--min-workers",
+    "min_workers",
+    default=1,
+    show_default=True,
+    help="The minimum number of workers.",
+)
+@click.option(
+    "--max-workers",
+    "max_workers",
+    default=50,
+    show_default=True,
+    help="The maximum number of workers.",
+)
+@click.option(
+    "--part-size",
+    "part_size",
+    default=kb(150),
+    show_default="150 KiB",
+    help="The size of each part.",
+)
+@click.option(
+    "--total-size",
+    "total_size",
+    default=mb(200),
+    show_default="200 MiB",
+    help="The size of the total object (must be less than total actual object size).",
+)
+@click.option(
+    "--scale-total-size",
+    "scale_total_size",
+    default=False,
+    show_default=True,
+    help="Maintain a constant part size per worker (scaling the total size with workers).",
+)
+@click.option(
+    "--copy-source",
+    "copy_source",
+    default=DEFAULT_COPY_SOURCE,
+    show_default=True,
+    help="The source s3 object to copy from (bucket/key).",
+)
+def zarr_test(
+    filename,
+    min_workers,
+    max_workers,
+    part_size,
+    total_size,
+    scale_total_size,
+    copy_source,
+):
     output_csv = pathlib.Path(__file__).parent / filename
     f = open(output_csv, "w")
     writer = csv.writer(f)
     writer.writerow(OUTPUT_CSV_HEADERS)
 
-    for i in range(1, MAX_WORKERS + 1):
-        # total_size = i * kb(150)
-        total_size = mb(200)
+    for i in range(min_workers, max_workers + 1):
+        if scale_total_size:
+            total_size = i * part_size
+
+        # Run func
         (
             parts,
             total,
@@ -184,8 +255,9 @@ if __name__ == "__main__":
             create_upload,
             part_copy,
             complete_upload,
-        ) = dissasemble_object(i, total_size)
+        ) = dissasemble_object(i, total_size, part_size, copy_source)
 
+        # Print stats
         print(f"Total time taken: {total:.4f} s")
 
         avg_part_total = part_total / len(parts)
@@ -200,7 +272,7 @@ if __name__ == "__main__":
         avg_complete_upload = complete_upload / len(parts)
         print(f"Average time spent completing uploads: {avg_complete_upload:.4f} s")
 
-        # Row data
+        # Write data to CSV
         writer.writerow(
             [
                 i,
@@ -214,5 +286,9 @@ if __name__ == "__main__":
         )
         f.flush()
 
-    # Close file
+    # Close CSV file
     f.close()
+
+
+if __name__ == "__main__":
+    zarr_test()

@@ -1,2 +1,3 @@
 boto3[s3]
+click
 dandischema==0.5.2
