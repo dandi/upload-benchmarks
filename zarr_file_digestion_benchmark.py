@@ -202,6 +202,13 @@ def dissasemble_object(workers, size, part_size, copy_source):
     help="The maximum number of workers.",
 )
 @click.option(
+    "--worker-step",
+    "worker_step",
+    default=1,
+    show_default=True,
+    help="How many workers to add each iteraton.",
+)
+@click.option(
     "--part-size",
     "part_size",
     default=kb(150),
@@ -220,6 +227,7 @@ def dissasemble_object(workers, size, part_size, copy_source):
     "scale_total_size",
     default=False,
     show_default=True,
+    is_flag=True,
     help="Maintain a constant part size per worker (scaling the total size with workers).",
 )
 @click.option(
@@ -233,6 +241,7 @@ def zarr_test(
     filename,
     min_workers,
     max_workers,
+    worker_step,
     part_size,
     total_size,
     scale_total_size,
@@ -243,7 +252,7 @@ def zarr_test(
     writer = csv.writer(f)
     writer.writerow(OUTPUT_CSV_HEADERS)
 
-    for i in range(min_workers, max_workers + 1):
+    for i in range(min_workers, max_workers + 1, worker_step):
         if scale_total_size:
             total_size = i * part_size
 
