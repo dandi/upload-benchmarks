@@ -1,0 +1,2 @@
+boto3[s3]
+dandischema==0.5.2
