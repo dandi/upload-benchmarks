@@ -74,8 +74,6 @@ def scan_source_files(root_path: Path):
 
 def initialize_upload(session, zarr_id, files):
     print(f'Initializing upload of {len(files)} files to {zarr_id}')
-    # Try deleting the upload preemptively just in case one already existed.
-    session.delete(f'{API_ROOT}/api/zarr/{zarr_id}/upload/')
     resp = session.post(f'{API_ROOT}/api/zarr/{zarr_id}/upload/', json=files)
     assert resp.status_code == 200
     return resp.json()
@@ -208,6 +206,9 @@ def upload_test(
         print(f'Created new zarr archive {zarr_id}')
 
     files = scan_source_files(source_dir)
+
+    # Try deleting the upload preemptively just in case one already existed.
+    session.delete(f'{API_ROOT}/api/zarr/{zarr_id}/upload/')
 
     timer = Timer()
     uploads = initialize_upload(session, zarr_id, files)
